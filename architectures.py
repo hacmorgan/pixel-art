@@ -151,3 +151,32 @@ def discriminator_model_generic(
     model.summary()
 
     return model
+
+
+def discriminator_model_generic_deeper(
+    input_shape: Tuple[int],
+) -> tf.keras.Sequential:
+    """
+    A generic discriminator model
+    """
+    model = tf.keras.Sequential(
+        [
+            layers.Conv2D(
+                64, (5, 5), strides=(2, 2), padding="same", input_shape=input_shape
+            ),
+            layers.LeakyReLU(0.2),
+            layers.Dropout(0.3),
+            layers.Conv2D(128, (5, 5), strides=(2, 2), padding="same"),
+            layers.LeakyReLU(0.2),
+            layers.Dropout(0.3),
+            layers.Conv2D(256, (5, 5), strides=(2, 2), padding="same"),
+            layers.LeakyReLU(0.2),
+            layers.Dropout(0.3),
+            layers.Flatten(),
+            layers.Dense(1),
+        ]
+    )
+
+    model.summary()
+
+    return model

@@ -24,6 +24,7 @@ import tensorflow as tf
 
 from architectures import (
     discriminator_model_generic,
+    discriminator_model_generic_deeper,
     generator_model_dcgan_paper,
     generator_model_dcgan_paper_lite,
 )
@@ -487,7 +488,7 @@ def main(
     generator = generator_model_dcgan_paper_lite()
     generator_optimizer = tf.keras.optimizers.Adam(start_lr, beta_1=0.5)
 
-    discriminator = discriminator_model_generic(input_shape=train_crop_shape)
+    discriminator = discriminator_model_generic_deeper(input_shape=train_crop_shape)
     discriminator_optimizer = tf.keras.optimizers.Adam(start_lr)
 
     checkpoint_dir = os.path.join(model_dir, "training_checkpoints")
