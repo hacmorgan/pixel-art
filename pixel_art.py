@@ -9,7 +9,7 @@ Train a generative adversarial network to generate pixel art.
 __author__ = "Hamish Morgan"
 
 
-from typing import Iterable, Tuple
+from typing import Iterable, Optional, Tuple
 
 import argparse
 import datetime
@@ -22,7 +22,14 @@ import numpy as np
 import PIL.Image
 import tensorflow as tf
 
-from architectures import discriminator_model_generic, generator_model_dcgan_paper
+from architectures import (
+    discriminator_model_generic,
+    generator_model_dcgan_paper,
+    generator_model_dcgan_paper_lite,
+)
+
+
+MODES_OF_OPERATION = ("train", "generate", "discriminate")
 
 
 # This method returns a helper function to compute cross entropy loss
@@ -210,9 +217,11 @@ def train_step(
     generator: tf.keras.Sequential,
     generator_optimizer: "Optimizer",
     generator_loss_metric: tf.keras.metrics,
+    should_train_generator: bool,
     discriminator: tf.keras.Sequential,
     discriminator_optimizer: "Optimizer",
     discriminator_loss_metric: tf.keras.metrics,
+    should_train_discriminator: bool,
     batch_size: int,
     noise_size: int,
 ) -> None:
@@ -224,9 +233,12 @@ def train_step(
         generator: Generator model
         generator_optimizer: Optimizer for generator model
         generator_loss: Metric for logging generator loss
+        should_train_generator: Update generator weights if True, do nothing otherwise
         discriminator: Discriminator model
         discriminator_optimizer: Optimizer for discriminator model
         discriminator_loss: Metric for logging discriminator loss
+        should_train_discriminator: Update discriminator weights if True, do nothing
+                                    otherwise
         batch_size: Number of training examples in a batch
         noise_size: Length of input noise vector
     """
@@ -246,37 +258,58 @@ def train_step(
         disc_loss, discriminator.trainable_variables
     )
 
-    generator_optimizer.apply_gradients(
-        zip(gradients_of_generator, generator.trainable_variables)
-    )
-    discriminator_optimizer.apply_gradients(
-        zip(gradients_of_discriminator, discriminator.trainable_variables)
-    )
+    if should_train_generator:
+        generator_optimizer.apply_gradients(
+            zip(gradients_of_generator, generator.trainable_variables)
+        )
+    if should_train_discriminator:
+        discriminator_optimizer.apply_gradients(
+            zip(gradients_of_discriminator, discriminator.trainable_variables)
+        )
 
     generator_loss_metric(gen_loss)
     discriminator_loss_metric(disc_loss)
 
 
 def train(
+    generator: tf.keras.Sequential,
+    discriminator: tf.keras.Sequential,
+    generator_optimizer: "Optimizer",
+    discriminator_optimizer: "Optimizer",
     model_dir: str,
+    checkpoint: tf.train.Checkpoint,
+    checkpoint_prefix: str,
     dataset_path: str,
-    epochs: int = 200,
+    epochs: int = 20000,
     train_crop_shape: Tuple[int, int, int] = (64, 64, 3),
     buffer_size: int = 1000,
     batch_size: int = 128,
-    epochs_per_turn: int = 3,
+    epochs_per_turn: int = 1,
+    latent_dim: int = 100,
+    num_examples_to_generate: int = 16,
+    continue_from_checkpoint: Optional[str] = None,
 ) -> None:
     """
-    Train the networks.
+    Train the model.
 
     Args:
+        generator: Generator network
+        discriminator: Discriminator network
+        generator_optimizer: Generator optimizer
+        discriminator_optimizer: Discriminator optimizer
         model_dir: Working dir for this experiment
+        checkpoint: Checkpoint to save to
+        checkpoint_prefix: Prefix to checkpoint numbers in checkpoint filenames
         dataset_path: Path to directory tree containing training data
         epochs: How many full passes through the dataset to make
         train_crop_shape: Desired shape of training crops from full images
         buffer_size: Number of images to randomly sample from at a time
         batch_size: Number of training examples in a batch
         epochs_per_turn: How long to train one model before switching to the other
+        latent_dim: Number of noise inputs to generator
+        num_examples_to_generate: How many examples to generate on each epoch
+        continue_from_checkpoint: Restore weights from checkpoint file if given, start
+                                  from scratch otherwise.
     """
     train_images = (
         tf.data.Dataset.from_generator(
@@ -286,25 +319,17 @@ def train(
         .shuffle(buffer_size)
         .batch(batch_size)
         .cache()
+        .prefetch(tf.data.AUTOTUNE)
     )
 
-    latent_dim = 100
-    num_examples_to_generate = 16
-
-    generator = generator_model_dcgan_paper()
-    generator_optimizer = tf.keras.optimizers.Adam(1e-4, beta_1=0.5)
-
-    discriminator = discriminator_model_generic(input_shape=train_crop_shape)
-    discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
-
-    checkpoint_dir = os.path.join(model_dir, "training_checkpoints")
-    checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
-    checkpoint = tf.train.Checkpoint(
-        generator_optimizer=generator_optimizer,
-        discriminator_optimizer=discriminator_optimizer,
-        generator=generator,
-        discriminator=discriminator,
-    )
+    # Set epochs accoridng
+    epoch_log_file = os.path.join(model_dir, "epoch_log")
+    if continue_from_checkpoint is not None:
+        with open(epoch_log_file, "r", encoding="utf-8") as epoch_log:
+            epoch_start = int(epoch_log.read().strip()) + 1
+    else:
+        epoch_start = 0
+    epoch_stop = epoch_start + epochs
 
     # Define our metrics
     generator_loss_metric = tf.keras.metrics.Mean("generator_loss", dtype=tf.float32)
@@ -323,22 +348,27 @@ def train(
     generator_summary_writer = tf.summary.create_file_writer(generator_log_dir)
     discriminator_summary_writer = tf.summary.create_file_writer(discriminator_log_dir)
 
-    # You will reuse this seed overtime (so it's easier)
-    # to visualize progress in the animated GIF)
+    # Use the same seed throughout training, to see what the model does with the same input as it trains.
     seed = tf.random.normal([num_examples_to_generate, latent_dim])
 
-    # Start by freezing the generator, give the discriminator a head start
-    generator.trainable = False
-    discriminator.trainable = True
-    
-    for epoch in range(epochs):
+    # Start by training both networks
+    should_train_generator = True
+    should_train_discriminator = True
+
+    for epoch in range(epoch_start, epoch_stop):
         start = time.time()
 
         # Alternate who can train periodically
-        if epoch % epochs_per_turn == 0:
-            generator.trainable = not generator.trainable
-            discriminator.trainable = not discriminator.trainable
-            print(f"Switching who trains: {generator.trainable=}, {discriminator.trainable=}")
+        # After the initial period of training both networks, we alternate who gets to train
+        if epoch != epoch_start and epoch % epochs_per_turn == 0:
+            if should_train_discriminator and should_train_generator:
+                should_train_generator = False
+            else:
+                should_train_generator = not should_train_generator
+                should_train_discriminator = not should_train_discriminator
+            print(
+                f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+            )
 
         for image_batch in train_images:
             train_step(
@@ -346,9 +376,11 @@ def train(
                 generator=generator,
                 generator_optimizer=generator_optimizer,
                 generator_loss_metric=generator_loss_metric,
+                should_train_generator=should_train_generator,
                 discriminator=discriminator,
                 discriminator_optimizer=discriminator_optimizer,
                 discriminator_loss_metric=discriminator_loss_metric,
+                should_train_discriminator=should_train_discriminator,
                 batch_size=batch_size,
                 noise_size=latent_dim,
             )
@@ -387,6 +419,115 @@ def train(
         generator_loss_metric.reset_states()
         discriminator_loss_metric.reset_states()
 
+        # Write our last epoch down in case we want to continue
+        with open(epoch_log_file, "w", encoding="utf-8") as epoch_log:
+            epoch_log.write(str(epoch))
+
+
+def generate(generator: tf.keras.Sequential, generator_input: Optional[str] = None) -> None:
+    """
+    Generate some pixel art
+
+    Args:
+        generator: Generator model
+        generator_input: Path to a 10x10 grayscale image to use as input. Random noise
+                         used if not given.
+    """
+    if generator_input is not None:
+        input_raw = tf.io.read_file(generator_input)
+        input_decoded = tf.image.decode_image(input_raw)
+        latent_input = tf.reshape(input_decoded, [1, 100])
+    else:
+        latent_input = tf.random.normal([1, 100])
+    while True:
+        generated = generator(latent_input, training=False)
+        plt.imshow(np.array((generated[0, :, :, :] * 127.5 + 127.5)).astype(int))
+        plt.axis("off")
+        plt.show()
+        latent_input = tf.random.normal([1, 100])
+
+
+def main(
+    mode: str,
+    model_dir: str,
+    dataset_path: str,
+    epochs: int = 20000,
+    train_crop_shape: Tuple[int, int, int] = (64, 64, 3),
+    buffer_size: int = 1000,
+    batch_size: int = 128,
+    epochs_per_turn: int = 1,
+    latent_dim: int = 100,
+    num_examples_to_generate: int = 16,
+    continue_from_checkpoint: Optional[str] = None,
+    generator_input: Optional[str] = None,
+) -> None:
+    """
+    Main routine.
+
+    Args:
+        mode: One of "train" "generate" "discriminate"
+        model_dir: Working dir for this experiment
+        dataset_path: Path to directory tree containing training data
+        epochs: How many full passes through the dataset to make
+        train_crop_shape: Desired shape of training crops from full images
+        buffer_size: Number of images to randomly sample from at a time
+        batch_size: Number of training examples in a batch
+        epochs_per_turn: How long to train one model before switching to the other
+        latent_dim: Number of noise inputs to generator
+        num_examples_to_generate: How many examples to generate on each epoch
+        continue_from_checkpoint: Restore weights from checkpoint file if given, start
+                                  from scratch otherwise.
+        generator_input: Path to a 10x10 grayscale image, to be used as input to the
+                         generator. Noise used if None
+    """
+    # generator = generator_model_dcgan_paper()
+    # start_lr = 1e-5 if continue_from_last_checkpoint else 1e-4
+    start_lr = 2e-4
+
+    generator = generator_model_dcgan_paper_lite()
+    generator_optimizer = tf.keras.optimizers.Adam(start_lr, beta_1=0.5)
+
+    discriminator = discriminator_model_generic(input_shape=train_crop_shape)
+    discriminator_optimizer = tf.keras.optimizers.Adam(start_lr)
+
+    checkpoint_dir = os.path.join(model_dir, "training_checkpoints")
+    checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+    checkpoint = tf.train.Checkpoint(
+        generator_optimizer=generator_optimizer,
+        discriminator_optimizer=discriminator_optimizer,
+        generator=generator,
+        discriminator=discriminator,
+    )
+
+    # Restore model from checkpoint
+    if continue_from_checkpoint is not None:
+        checkpoint.restore(continue_from_checkpoint)
+
+    if mode == "train":
+        train(
+            generator=generator,
+            discriminator=discriminator,
+            generator_optimizer=generator_optimizer,
+            discriminator_optimizer=discriminator_optimizer,
+            model_dir=model_dir,
+            checkpoint=checkpoint,
+            checkpoint_prefix=checkpoint_prefix,
+            dataset_path=dataset_path,
+            epochs=epochs,
+            train_crop_shape=train_crop_shape,
+            buffer_size=buffer_size,
+            batch_size=batch_size,
+            epochs_per_turn=epochs_per_turn,
+            latent_dim=latent_dim,
+            num_examples_to_generate=num_examples_to_generate,
+            continue_from_checkpoint=continue_from_checkpoint,
+        )
+    elif mode == "generate":
+        generate(
+            generator=generator,
+            generator_input=generator_input,
+        )
+
 
 def get_args() -> argparse.Namespace:
     """
@@ -398,30 +539,41 @@ def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         "Generate pixel art", formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    subparsers = parser.add_subparsers(help="Modes of operation", dest="subcommand")
-
-    train_parser = subparsers.add_parser(
-        "train", help="Train the generator and discriminator models"
+    parser.add_argument(
+        "mode",
+        type=str,
+        help="Mode of operation, must be one of {MODES_OF_OPERATION}",
     )
-    train_parser.add_argument(
+    parser.add_argument(
+        "--checkpoint",
+        "-c",
+        type=str,
+        help="Generate, discriminate, or continue training model from this checkpoint",
+    )
+    parser.add_argument(
         "--dataset",
         "-d",
         type=str,
         default="./training-data",
         help="Path to dataset directory, containing training images",
     )
-    train_parser.add_argument(
+    parser.add_argument(
+        "--generator-input",
+        "-g",
+        type=str,
+        help="10x10 grayscale image, flattened and used as input to the generator. "
+        "Random noise is used if not given"
+    )
+    parser.add_argument(
         "--model-name",
         "-m",
         type=str,
         default=datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
-        help="Name of this model/experiment for logging. Generated automatically if not given.",
     )
-
     return parser.parse_args()
 
 
-def main(args: argparse.Namespace) -> int:
+def cli_main(args: argparse.Namespace) -> int:
     """
     Main CLI routine
 
@@ -431,12 +583,18 @@ def main(args: argparse.Namespace) -> int:
     Returns:
         Exit status
     """
-    if args.subcommand == "train":
-        train(
-            model_dir=os.path.join("models", args.model_name), dataset_path=args.dataset
-        )
+    if args.mode not in MODES_OF_OPERATION:
+        print(f"Invalid mode: {args.mode}, must be one of {MODES_OF_OPERATION}")
+        return 1
+    main(
+        mode=args.mode,
+        model_dir=os.path.join("models", args.model_name),
+        dataset_path=args.dataset,
+        continue_from_checkpoint=args.checkpoint,
+        generator_input=args.generator_input,
+    )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(get_args()))
+    sys.exit(cli_main(get_args()))

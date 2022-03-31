@@ -12,7 +12,9 @@ from tensorflow.keras import layers
 
 def generator_model_dcgan_paper() -> tf.keras.Sequential:
     """
-    The generator used in the DCGAN paper
+    The generator used in the DCGAN paper.
+
+    This is a very large model, it doesn't fit on a GTX980 :(
     """
     latent_dim = 100
     model = tf.keras.Sequential(
@@ -39,6 +41,41 @@ def generator_model_dcgan_paper() -> tf.keras.Sequential:
             # layers.leakyReLU(0.2),
             layers.Conv2DTranspose(
                 3, kernel_size=5, strides=2, padding="same", activation="tanh"
+            ),
+            layers.BatchNormalization(),
+            # layers.leakyReLU(0.2),
+        ]
+    )
+    model.summary()
+    return model
+
+
+def generator_model_dcgan_paper_lite() -> tf.keras.Sequential:
+    """
+    The generator used in the DCGAN paper.
+
+    A smaller model, to fit on a GTX980.
+    """
+    latent_dim = 100
+    model = tf.keras.Sequential(
+        [
+            layers.Input(shape=(latent_dim,)),
+            layers.Dense(8 * 8 * 512, use_bias=False, activation="relu"),
+            layers.Reshape((8, 8, 512)),
+            layers.BatchNormalization(),
+            # layers.leakyReLU(0.2),
+            layers.Conv2DTranspose(
+                256, kernel_size=5, strides=2, padding="same", activation="relu", use_bias=False,
+            ),
+            layers.BatchNormalization(),
+            # layers.leakyReLU(0.2),
+            layers.Conv2DTranspose(
+                128, kernel_size=5, strides=2, padding="same", activation="relu", use_bias=False
+            ),
+            layers.BatchNormalization(),
+            # layers.leakyReLU(0.2),
+            layers.Conv2DTranspose(
+                3, kernel_size=5, strides=2, padding="same", activation="tanh", use_bias=False
             ),
             layers.BatchNormalization(),
             # layers.leakyReLU(0.2),
@@ -104,7 +141,7 @@ def discriminator_model_generic(
             layers.LeakyReLU(0.2),
             layers.Dropout(0.3),
             layers.Conv2D(128, (5, 5), strides=(2, 2), padding="same"),
-            layers.LeakyReLU(),
+            layers.LeakyReLU(0.2),
             layers.Dropout(0.3),
             layers.Flatten(),
             layers.Dense(1),
