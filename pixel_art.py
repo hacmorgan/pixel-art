@@ -9,7 +9,7 @@ Train a generative adversarial network to generate pixel art.
 __author__ = "Hamish Morgan"
 
 
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import argparse
 import datetime
@@ -27,6 +27,7 @@ from architectures import (
     discriminator_model_generic_deeper,
     generator_model_dcgan_paper,
     generator_model_dcgan_paper_lite,
+    generator_model_dcgan_paper_lite_relu,
 )
 
 
@@ -65,7 +66,7 @@ def crops_from_full_size(
 
 def permute_flips(
     image: np.ndarray, flip_x: bool = True, flip_y: bool = True
-) -> list[np.ndarray]:
+) -> List[np.ndarray]:
     """
     From an input image, yield that image flipped in x and/or y
     """
@@ -440,11 +441,16 @@ def generate(generator: tf.keras.Sequential, generator_input: Optional[str] = No
         latent_input = tf.reshape(input_decoded, [1, 100])
     else:
         latent_input = tf.random.normal([1, 100])
+    i = 0
     while True:
         generated = generator(latent_input, training=False)
         plt.imshow(np.array((generated[0, :, :, :] * 127.5 + 127.5)).astype(int))
         plt.axis("off")
         plt.show()
+        # plt.savefig(f"/mnt/c/Users/Emily/Desktop/generated_{i}.png")
+        # print(f"image generated to: /mnt/c/Users/Emily/Desktop/generated_{i}.png")
+        # input("press enter to generate another image")
+        i += 1
         latent_input = tf.random.normal([1, 100])
 
 
@@ -481,11 +487,10 @@ def main(
         generator_input: Path to a 10x10 grayscale image, to be used as input to the
                          generator. Noise used if None
     """
-    # generator = generator_model_dcgan_paper()
-    # start_lr = 1e-5 if continue_from_last_checkpoint else 1e-4
-    start_lr = 2e-4
+    start_lr = 5e-6 if continue_from_checkpoint is not None else 2e-4
 
-    generator = generator_model_dcgan_paper_lite()
+    # generator = generator_model_dcgan_paper_lite()
+    generator = generator_model_dcgan_paper_lite_relu()
     generator_optimizer = tf.keras.optimizers.Adam(start_lr, beta_1=0.5)
 
     discriminator = discriminator_model_generic_deeper(input_shape=train_crop_shape)
