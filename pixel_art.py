@@ -28,6 +28,7 @@ from architectures import (
     generator_model_dcgan_paper,
     generator_model_dcgan_paper_lite,
     generator_model_dcgan_paper_lite_relu,
+    generator_model_dcgan_paper_lite_relu_no_bias,
 )
 
 
@@ -362,16 +363,17 @@ def train(
 
         # Alternate who can train periodically
         # After the initial period of training both networks, we alternate who gets to train
-        if epoch != epoch_start and epoch % epochs_per_turn == 0:
-            if should_train_discriminator and should_train_generator:
-                should_train_generator = False
-            else:
-                should_train_generator = not should_train_generator
-                should_train_discriminator = not should_train_discriminator
-            print(
-                f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
-            )
+        # if epoch != epoch_start and epoch % epochs_per_turn == 0:
+        #     if should_train_discriminator and should_train_generator:
+        #         should_train_generator = False
+        #     else:
+        #         should_train_generator = not should_train_generator
+        #         should_train_discriminator = not should_train_discriminator
+        #     print(
+        #         f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+        #     )
 
+        generator_counter = 3
         for image_batch in train_images:
             train_step(
                 images=image_batch,
@@ -386,6 +388,15 @@ def train(
                 batch_size=batch_size,
                 noise_size=latent_dim,
             )
+            if should_train_discriminator == should_train_generator:
+                should_train_generator = False
+                should_train_discriminator = True
+            elif should_train_generator and generator_counter > 0:
+                cenerator_counter -= 1  # give the generator more epochs to train
+            else:
+                should_train_generator = not should_train_generator
+                should_train_discriminator = not should_train_discriminator
+                generator_counter = 3
 
         with generator_summary_writer.as_default(), discriminator_summary_writer.as_default():
             tf.summary.scalar(
@@ -490,7 +501,8 @@ def main(
     start_lr = 5e-6 if continue_from_checkpoint is not None else 2e-4
 
     # generator = generator_model_dcgan_paper_lite()
-    generator = generator_model_dcgan_paper_lite_relu()
+    # generator = generator_model_dcgan_paper_lite_relu()
+    generator = generator_model_dcgan_paper_lite_relu_no_bias()
     generator_optimizer = tf.keras.optimizers.Adam(start_lr, beta_1=0.5)
 
     discriminator = discriminator_model_generic_deeper(input_shape=train_crop_shape)
@@ -548,7 +560,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "mode",
         type=str,
-        help="Mode of operation, must be one of {MODES_OF_OPERATION}",
+        help=f"Mode of operation, must be one of {MODES_OF_OPERATION}",
     )
     parser.add_argument(
         "--checkpoint",
