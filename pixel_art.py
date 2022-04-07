@@ -17,26 +17,39 @@ import os
 import sys
 import time
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import PIL.Image
+import PIL.ImageTk
 import tensorflow as tf
+import tkinter
 
 from architectures import (
     discriminator_model_generic,
     discriminator_model_generic_deeper,
+    discriminator_model_generic_even_deeper,
     generator_model_dcgan_paper,
     generator_model_dcgan_paper_lite,
     generator_model_dcgan_paper_lite_relu,
     generator_model_dcgan_paper_lite_relu_no_bias,
+    generator_model_dcgan_paper_lite_deeper,
 )
 
 
-MODES_OF_OPERATION = ("train", "generate", "discriminate")
+MODES_OF_OPERATION = ("train", "generate", "discriminate", "view-latent-space")
 
 
 # This method returns a helper function to compute cross entropy loss
 cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+
+
+global generator_
+global generated_image
+global latent_input
+global input_neuron
+global latent_input_canvas
+global generator_output_canvas
 
 
 def crops_from_full_size(
@@ -114,7 +127,7 @@ class PixelArtDataset:
         for image_path in self.find_training_images():
             try:
                 with PIL.Image.open(image_path) as image:
-                    image_np = np.array(image)
+                    image_np = np.array(image.convert("HSV"))
             except PIL.UnidentifiedImageError:
                 print(
                     f"Cannot open file: {image_path}, it will not be used for training"
@@ -205,7 +218,10 @@ def generate_and_save_images(model, epoch, test_input, model_dir: str):
 
     for i in range(predictions.shape[0]):
         plt.subplot(4, 4, i + 1)
-        plt.imshow(np.array((predictions[i, :, :, :] * 127.5 + 127.5)).astype(int))
+        generated_hsv_image = np.array(
+            (predictions[i, :, :, :] * 127.5 + 127.5)
+        ).astype(int)
+        plt.imshow(cv2.cvtColor(generated_hsv_image, cv2.COLOR_HSV2RGB))
         plt.axis("off")
 
     os.makedirs(progress_dir := os.path.join(model_dir, "progress"), exist_ok=True)
@@ -363,17 +379,18 @@ def train(
 
         # Alternate who can train periodically
         # After the initial period of training both networks, we alternate who gets to train
-        # if epoch != epoch_start and epoch % epochs_per_turn == 0:
-        #     if should_train_discriminator and should_train_generator:
-        #         should_train_generator = False
-        #     else:
-        #         should_train_generator = not should_train_generator
-        #         should_train_discriminator = not should_train_discriminator
-        #     print(
-        #         f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
-        #     )
+        if epoch != epoch_start and epoch % epochs_per_turn == 0:
+            if should_train_discriminator == should_train_generator:
+                should_train_generator = False
+                should_train_discriminator = True
+            else:
+                should_train_generator = not should_train_generator
+                should_train_discriminator = not should_train_discriminator
+            print(
+                f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+            )
 
-        generator_counter = 3
+        # generator_counter = 6
         for image_batch in train_images:
             train_step(
                 images=image_batch,
@@ -388,15 +405,15 @@ def train(
                 batch_size=batch_size,
                 noise_size=latent_dim,
             )
-            if should_train_discriminator == should_train_generator:
-                should_train_generator = False
-                should_train_discriminator = True
-            elif should_train_generator and generator_counter > 0:
-                cenerator_counter -= 1  # give the generator more epochs to train
-            else:
-                should_train_generator = not should_train_generator
-                should_train_discriminator = not should_train_discriminator
-                generator_counter = 3
+            # if should_train_discriminator == should_train_generator:
+            #     should_train_generator = False
+            #     should_train_discriminator = True
+            # elif should_train_generator and generator_counter > 0:
+            #     generator_counter -= 1  # give the generator more epochs to train
+            # else:
+            #     should_train_generator = not should_train_generator
+            #     should_train_discriminator = not should_train_discriminator
+            #     generator_counter = 6
 
         with generator_summary_writer.as_default(), discriminator_summary_writer.as_default():
             tf.summary.scalar(
@@ -407,7 +424,8 @@ def train(
             )
 
         # Produce images for the GIF as you go
-        generate_and_save_images(generator, epoch + 1, seed, model_dir)
+        if should_train_generator:
+            generate_and_save_images(generator, epoch + 1, seed, model_dir)
 
         # Save the model every 15 epochs
         if (epoch + 1) % 15 == 0:
@@ -417,12 +435,14 @@ def train(
 
         template = """
         Epoch: {epoch}
+        Time: {epoch_time}
         Generator loss: {generator_loss}
         Discriminator Loss: {discriminator_loss}
         """
         print(
             template.format(
                 epoch=epoch + 1,
+                epoch_time=time.time() - start,
                 generator_loss=generator_loss_metric.result(),
                 discriminator_loss=discriminator_loss_metric.result(),
             )
@@ -437,7 +457,9 @@ def train(
             epoch_log.write(str(epoch))
 
 
-def generate(generator: tf.keras.Sequential, generator_input: Optional[str] = None) -> None:
+def generate(
+    generator: tf.keras.Sequential, generator_input: Optional[str] = None
+) -> None:
     """
     Generate some pixel art
 
@@ -454,8 +476,10 @@ def generate(generator: tf.keras.Sequential, generator_input: Optional[str] = No
         latent_input = tf.random.normal([1, 100])
     i = 0
     while True:
-        generated = generator(latent_input, training=False)
-        plt.imshow(np.array((generated[0, :, :, :] * 127.5 + 127.5)).astype(int))
+        generated_hsv_image = np.array(
+            (generator(latent_input, training=False)[0, :, :, :] * 127.5 + 127.5)
+        ).astype(int)
+        plt.imshow(cv2.cvtColor(generated_hsv_image, cv2.COLOR_HSV2RGB))
         plt.axis("off")
         plt.show()
         # plt.savefig(f"/mnt/c/Users/Emily/Desktop/generated_{i}.png")
@@ -465,6 +489,95 @@ def generate(generator: tf.keras.Sequential, generator_input: Optional[str] = No
         latent_input = tf.random.normal([1, 100])
 
 
+def regenerate_images(slider_value: Optional[float] = None) -> None:
+    """
+    Render input as 10x10 grayscale image, feed it into the generator to generate a new
+    output, and update the GUI.
+
+    Args:
+        slider_value: Position of slider, between 0 and 1. If not given, randomize input.
+    """
+    global generator_
+    global generated_image
+    global latent_input
+    global input_neuron
+    global latent_input_canvas
+    global generator_output_canvas
+    if slider_value is not None:
+        latent_input[input_neuron] = slider_value
+    else:
+        latent_input = tf.random.normal([1, 100])
+    # breakpoint()
+    generated_output = np.array(
+        generator_(latent_input, training=False)[0, :, :, :] * 127.5 + 127.5
+    ).astype(int)
+    print(generated_output.shape)
+    print(latent_input.shape)
+    generated_image = PIL.ImageTk.PhotoImage(
+        PIL.Image.fromarray(generated_output, mode="RGB")
+    )
+    latent_image = PIL.ImageTk.PhotoImage(
+        PIL.Image.fromarray(np.array(tf.reshape(latent_input, [10, 10])))
+    )
+    latent_input_canvas.create_image(0, 0, image=latent_image, anchor=tkinter.NW)
+    generator_output_canvas.create_image(0, 0, image=generated_image, anchor=tkinter.NW)
+
+
+def view_latent_space(generator: tf.keras.Sequential) -> None:
+    """
+    View and modify the latent input using a basic Tkinter GUI.
+
+    Args:
+        generator: Generator model
+    """
+    # Create the window
+    window = tkinter.Tk()
+
+    # Add canvases to display images
+    global latent_input_canvas
+    global generator_output_canvas
+    latent_input_canvas = tkinter.Canvas(master=window, width=100, height=100)
+    generator_output_canvas = tkinter.Canvas(master=window, width=128, height=128)
+
+    # Slider to set input activation for selected noise input
+    input_value_slider = tkinter.Scale(
+        master=window,
+        from_=0.0,
+        to=255.0,
+        command=lambda: regenerate_images(slider_value=input_value_slider.get()),
+        orient=tkinter.HORIZONTAL,
+        length=600,
+        width=30,
+        bg="blue",
+    )
+
+    # Buttons
+    randomize_button = tkinter.Button(
+        master=window,
+        text="randomize",
+        command=regenerate_images,
+        padx=40,
+        pady=20,
+        bg="orange",
+    )
+
+    # Set layout
+    generator_output_canvas.grid(row=0, column=0)
+    latent_input_canvas.grid(row=1, column=0)
+    input_value_slider.grid(row=2, column=0)
+    randomize_button.grid(row=3, column=0)
+
+    # Define the globals
+    global generator_
+    generator_ = generator
+
+    # Start randomly
+    regenerate_images()
+
+    # Run gui
+    window.mainloop()
+
+
 def main(
     mode: str,
     model_dir: str,
@@ -472,7 +585,7 @@ def main(
     epochs: int = 20000,
     train_crop_shape: Tuple[int, int, int] = (64, 64, 3),
     buffer_size: int = 1000,
-    batch_size: int = 128,
+    batch_size: int = 32,
     epochs_per_turn: int = 1,
     latent_dim: int = 100,
     num_examples_to_generate: int = 16,
@@ -498,14 +611,14 @@ def main(
         generator_input: Path to a 10x10 grayscale image, to be used as input to the
                          generator. Noise used if None
     """
-    start_lr = 5e-6 if continue_from_checkpoint is not None else 2e-4
+    start_lr = 5e-6 if continue_from_checkpoint is not None else 1e-4
 
     # generator = generator_model_dcgan_paper_lite()
     # generator = generator_model_dcgan_paper_lite_relu()
-    generator = generator_model_dcgan_paper_lite_relu_no_bias()
-    generator_optimizer = tf.keras.optimizers.Adam(start_lr, beta_1=0.5)
+    generator = generator_model_dcgan_paper_lite_deeper()
+    generator_optimizer = tf.keras.optimizers.Adam(start_lr)
 
-    discriminator = discriminator_model_generic_deeper(input_shape=train_crop_shape)
+    discriminator = discriminator_model_generic_even_deeper(input_shape=train_crop_shape)
     discriminator_optimizer = tf.keras.optimizers.Adam(start_lr)
 
     checkpoint_dir = os.path.join(model_dir, "training_checkpoints")
@@ -545,6 +658,8 @@ def main(
             generator=generator,
             generator_input=generator_input,
         )
+    elif mode == "view-latent-space":
+        view_latent_space(generator=generator)
 
 
 def get_args() -> argparse.Namespace:
@@ -580,7 +695,7 @@ def get_args() -> argparse.Namespace:
         "-g",
         type=str,
         help="10x10 grayscale image, flattened and used as input to the generator. "
-        "Random noise is used if not given"
+        "Random noise is used if not given",
     )
     parser.add_argument(
         "--model-name",

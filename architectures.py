@@ -175,6 +175,56 @@ def generator_model_dcgan_paper_lite_relu_no_bias() -> tf.keras.Sequential:
     return model
 
 
+def generator_model_dcgan_paper_lite_deeper() -> tf.keras.Sequential:
+    """
+    A smaller version of the DGCAN paper model, to fit on a GTX980.
+
+    This version is improved over the previous version, by using LeakyReLU activations
+    and adding another conv layer.
+    """
+    latent_dim = 100
+    init = tf.keras.initializers.RandomNormal(stddev=0.02)
+    model = tf.keras.Sequential(
+        [
+            # Latent input
+            layers.Input(shape=(latent_dim,)),
+            # Dense layer, shaped as (4, 4, 256) conv layer
+            layers.Dense(4 * 4 * 256, kernel_initializer=init, use_bias=False),
+            layers.LeakyReLU(alpha=0.2),
+            layers.Reshape((4, 4, 256)),
+            layers.BatchNormalization(),
+            # 1. upscale by fractionally strided conv, (8, 8, 256)
+            layers.Conv2DTranspose(
+                256, kernel_size=5, strides=2, padding="same", use_bias=False, kernel_initializer=init,
+            ),
+            layers.LeakyReLU(alpha=0.2),
+            layers.BatchNormalization(),
+            # 2. upscale by fractionally strided conv, (16, 16, 256)
+            layers.Conv2DTranspose(
+                256, kernel_size=5, strides=2, padding="same", use_bias=False, kernel_initializer=init,
+            ),
+            layers.LeakyReLU(alpha=0.2),
+            layers.BatchNormalization(),
+            # 3. upscale by fractionally strided conv, (32, 32, 128)
+            layers.Conv2DTranspose(
+                128, kernel_size=5, strides=2, padding="same", use_bias=False, kernel_initializer=init,
+            ),
+            layers.BatchNormalization(),
+            layers.LeakyReLU(alpha=0.2),
+            # 4. upscale by fractionally strided conv, (64, 64, 64)
+            layers.Conv2DTranspose(
+                64, kernel_size=5, strides=2, padding="same", use_bias=False, kernel_initializer=init,
+            ),
+            layers.BatchNormalization(),
+            layers.LeakyReLU(alpha=0.2),
+            # Output, (64, 64, 3)
+            layers.Conv2D(3, kernel_size=7, padding="same", use_bias=False, activation="tanh", kernel_initializer=init)
+        ]
+    )
+    model.summary()
+    return model
+
+
 def discriminator_model_generic(
     input_shape: Tuple[int],
 ) -> tf.keras.Sequential:
@@ -222,6 +272,46 @@ def discriminator_model_generic_deeper(
             layers.Dropout(0.3),
             # Quarter input size conv layer (e.g. 16, 16, 256)
             layers.Conv2D(256, (5, 5), strides=(2, 2), padding="same", kernel_initializer=init),
+            layers.LeakyReLU(alpha=0.2),
+            layers.Dropout(0.3),
+            # Output neuron
+            layers.Flatten(),
+            layers.Dense(1),
+        ]
+    )
+
+    model.summary()
+
+    return model
+
+
+def discriminator_model_generic_even_deeper(
+    input_shape: Tuple[int],
+) -> tf.keras.Sequential:
+    """
+    A generic discriminator model
+    """
+    init = tf.keras.initializers.RandomNormal(stddev=0.02)
+    model = tf.keras.Sequential(
+        [
+            # Input size conv layer (e.g. 64, 64, 64)
+            layers.Conv2D(
+                64, kernel_size=5, strides=1, padding="same", input_shape=input_shape, kernel_initializer=init
+            ),
+            layers.LeakyReLU(alpha=0.2),
+            layers.Dropout(0.3),
+            # Input size conv layer (e.g. 64, 64, 64)
+            layers.Conv2D(
+                64, kernel_size=5, strides=2, padding="same", input_shape=input_shape, kernel_initializer=init
+            ),
+            layers.LeakyReLU(alpha=0.2),
+            layers.Dropout(0.3),
+            # Half input size conv layer (e.g. 32, 32, 128)
+            layers.Conv2D(128, kernel_size=5, strides=2, padding="same", kernel_initializer=init),
+            layers.LeakyReLU(alpha=0.2),
+            layers.Dropout(0.3),
+            # Quarter input size conv layer (e.g. 16, 16, 256)
+            layers.Conv2D(256, kernel_size=5, strides=2, padding="same", kernel_initializer=init),
             layers.LeakyReLU(alpha=0.2),
             layers.Dropout(0.3),
             # Output neuron
