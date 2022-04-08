@@ -39,6 +39,14 @@ from architectures import (
 
 MODES_OF_OPERATION = ("train", "generate", "discriminate", "view-latent-space")
 
+UPDATE_TEMPLATE = """
+Epoch: {epoch}
+Step: {step}
+Time: {epoch_time}
+Generator loss: {generator_loss}
+Discriminator Loss: {discriminator_loss}
+"""
+
 
 # This method returns a helper function to compute cross entropy loss
 cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
@@ -220,8 +228,10 @@ def generate_and_save_images(model, epoch, test_input, model_dir: str):
         plt.subplot(4, 4, i + 1)
         generated_hsv_image = np.array(
             (predictions[i, :, :, :] * 127.5 + 127.5)
-        ).astype(int)
-        plt.imshow(cv2.cvtColor(generated_hsv_image, cv2.COLOR_HSV2RGB))
+        ).astype(np.uint8)
+        # generated_rgb_image = np.array(PIL.Image.fromarray(generated_hsv_image, mode="HSV").convert("RGB"))
+        generated_rgb_image = cv2.cvtColor(generated_hsv_image, cv2.COLOR_HSV2RGB)
+        plt.imshow(generated_rgb_image)
         plt.axis("off")
 
     os.makedirs(progress_dir := os.path.join(model_dir, "progress"), exist_ok=True)
@@ -374,24 +384,42 @@ def train(
     should_train_generator = True
     should_train_discriminator = True
 
+    # Track total steps
+    total_steps = 0
+
+    # Train for 300 steps at a time
+    train_steps_per_turn = 400
+
+    # Number of steps this turn
+    steps_this_turn = 0
+
+    # # How long to train both networks for at the start
+    # initial_train_steps = 100
+
+    # # Minimum training steps per turn
+    # min_steps_per_turn = 50
+    
+    # # Train each network until its loss is < threshold
+    # switch_who_trains_threshold = 0.2
+
     for epoch in range(epoch_start, epoch_stop):
         start = time.time()
 
         # Alternate who can train periodically
         # After the initial period of training both networks, we alternate who gets to train
-        if epoch != epoch_start and epoch % epochs_per_turn == 0:
-            if should_train_discriminator == should_train_generator:
-                should_train_generator = False
-                should_train_discriminator = True
-            else:
-                should_train_generator = not should_train_generator
-                should_train_discriminator = not should_train_discriminator
-            print(
-                f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
-            )
+        # if epoch != epoch_start and epoch % epochs_per_turn == 0:
+        #     if should_train_discriminator == should_train_generator:
+        #         should_train_generator = False
+        #         should_train_discriminator = True
+        #     else:
+        #         should_train_generator = not should_train_generator
+        #         should_train_discriminator = not should_train_discriminator
+        #     print(
+        #         f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+        #     )
 
-        # generator_counter = 6
-        for image_batch in train_images:
+        for step, image_batch in enumerate(train_images):
+            # Perform training step
             train_step(
                 images=image_batch,
                 generator=generator,
@@ -405,48 +433,85 @@ def train(
                 batch_size=batch_size,
                 noise_size=latent_dim,
             )
+
+            steps_this_turn += 1
+            
             # if should_train_discriminator == should_train_generator:
-            #     should_train_generator = False
+            #     if initial_train_steps > 0:
+            #         initial_train_steps -= 1
+            #     else:
+            #         should_train_generator = False
+            #         should_train_discriminator = True
+            # elif should_train_generator and generator_loss_metric.result() < switch_who_trains_threshold and steps_this_turn > min_steps_per_turn:
+            #     generator_loss_metric.reset_states()
+            #     discriminator_loss_metric.reset_states()
             #     should_train_discriminator = True
-            # elif should_train_generator and generator_counter > 0:
-            #     generator_counter -= 1  # give the generator more epochs to train
-            # else:
-            #     should_train_generator = not should_train_generator
-            #     should_train_discriminator = not should_train_discriminator
-            #     generator_counter = 6
+            #     should_train_generator = False
+            #     steps_this_turn = 0
+            #     print(
+            #         f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+            #     )
+            # elif should_train_discriminator and discriminator_loss_metric.result() < switch_who_trains_threshold and steps_this_turn > min_steps_per_turn:
+            #     generator_loss_metric.reset_states()
+            #     discriminator_loss_metric.reset_states()
+            #     should_train_discriminator = False
+            #     should_train_generator = True
+            #     steps_this_turn = 0
+            #     print(
+            #         f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+            #     )
 
-        with generator_summary_writer.as_default(), discriminator_summary_writer.as_default():
-            tf.summary.scalar(
-                "generator_loss", generator_loss_metric.result(), step=epoch
-            )
-            tf.summary.scalar(
-                "discriminator_loss", discriminator_loss_metric.result(), step=epoch
-            )
+            # # Avoid getting stuck by averaging over many many losses
+            # if step % 100 == 0:
+            #     generator_loss_metric.reset_states()
+            #     discriminator_loss_metric.reset_states()
+            #     steps_this_turn = min([steps_this_turn, min_steps_per_turn])
+                
+                
+            
+            # Switch who trains every 300 steps
+            if steps_this_turn >= train_steps_per_turn:
+                steps_this_turn = 0
+                if should_train_discriminator == should_train_generator:
+                    should_train_generator = False
+                    should_train_discriminator = True
+                else:
+                    should_train_generator = not should_train_generator
+                    should_train_discriminator = not should_train_discriminator
+                print(
+                    f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+                )
 
-        # Produce images for the GIF as you go
-        if should_train_generator:
-            generate_and_save_images(generator, epoch + 1, seed, model_dir)
+                # Reset metrics
+                generator_loss_metric.reset_states()
+                discriminator_loss_metric.reset_states()
+
+            with generator_summary_writer.as_default(), discriminator_summary_writer.as_default():
+                tf.summary.scalar(
+                    "generator_loss", generator_loss_metric.result(), step=total_steps
+                )
+                tf.summary.scalar(
+                    "discriminator_loss", discriminator_loss_metric.result(), step=total_steps
+                )
+                total_steps += 1
+
+            if step % 5 == 0:
+                print(
+                    UPDATE_TEMPLATE.format(
+                        epoch=epoch + 1,
+                        step=step,
+                        epoch_time=time.time() - start,
+                        generator_loss=generator_loss_metric.result(),
+                        discriminator_loss=discriminator_loss_metric.result(),
+                    )
+                )
+
+        # Produce demo output every epoch
+        generate_and_save_images(generator, epoch + 1, seed, model_dir)
 
         # Save the model every 15 epochs
         if (epoch + 1) % 15 == 0:
             checkpoint.save(file_prefix=checkpoint_prefix)
-
-        print("Time for epoch {} is {} sec".format(epoch + 1, time.time() - start))
-
-        template = """
-        Epoch: {epoch}
-        Time: {epoch_time}
-        Generator loss: {generator_loss}
-        Discriminator Loss: {discriminator_loss}
-        """
-        print(
-            template.format(
-                epoch=epoch + 1,
-                epoch_time=time.time() - start,
-                generator_loss=generator_loss_metric.result(),
-                discriminator_loss=discriminator_loss_metric.result(),
-            )
-        )
 
         # Reset metrics every epoch
         generator_loss_metric.reset_states()
@@ -478,8 +543,10 @@ def generate(
     while True:
         generated_hsv_image = np.array(
             (generator(latent_input, training=False)[0, :, :, :] * 127.5 + 127.5)
-        ).astype(int)
-        plt.imshow(cv2.cvtColor(generated_hsv_image, cv2.COLOR_HSV2RGB))
+        ).astype(np.uint8)
+        # generated_rgb_image = np.array(PIL.Image.fromarray(generated_hsv_image, mode="HSV").convert("RGB"))
+        generated_rgb_image = cv2.cvtColor(generated_hsv_image, cv2.COLOR_HSV2RGB)
+        plt.imshow(generated_rgb_image)
         plt.axis("off")
         plt.show()
         # plt.savefig(f"/mnt/c/Users/Emily/Desktop/generated_{i}.png")
