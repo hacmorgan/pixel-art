@@ -21,9 +21,9 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import PIL.Image
-import PIL.ImageTk
+# import PIL.ImageTk
 import tensorflow as tf
-import tkinter
+# import tkinter
 
 from architectures import (
     discriminator_model_generic,
@@ -682,10 +682,12 @@ def main(
 
     # generator = generator_model_dcgan_paper_lite()
     # generator = generator_model_dcgan_paper_lite_relu()
-    generator = generator_model_dcgan_paper_lite_deeper()
+    generator = generator_model_dcgan_paper_lite_relu_no_bias()
+    # generator = generator_model_dcgan_paper_lite_deeper()
     generator_optimizer = tf.keras.optimizers.Adam(start_lr)
 
-    discriminator = discriminator_model_generic_even_deeper(input_shape=train_crop_shape)
+    discriminator = discriminator_model_generic_deeper(input_shape=train_crop_shape)
+    # discriminator = discriminator_model_generic_even_deeper(input_shape=train_crop_shape)
     discriminator_optimizer = tf.keras.optimizers.Adam(start_lr)
 
     checkpoint_dir = os.path.join(model_dir, "training_checkpoints")
