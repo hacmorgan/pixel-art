@@ -407,16 +407,16 @@ def train(
 
         # Alternate who can train periodically
         # After the initial period of training both networks, we alternate who gets to train
-        # if epoch != epoch_start and epoch % epochs_per_turn == 0:
-        #     if should_train_discriminator == should_train_generator:
-        #         should_train_generator = False
-        #         should_train_discriminator = True
-        #     else:
-        #         should_train_generator = not should_train_generator
-        #         should_train_discriminator = not should_train_discriminator
-        #     print(
-        #         f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
-        #     )
+        if epoch != epoch_start and epoch % epochs_per_turn == 0:
+            if should_train_discriminator == should_train_generator:
+                should_train_generator = False
+                should_train_discriminator = True
+            else:
+                should_train_generator = not should_train_generator
+                should_train_discriminator = not should_train_discriminator
+            print(
+                f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+            )
 
         for step, image_batch in enumerate(train_images):
             # Perform training step
@@ -434,8 +434,6 @@ def train(
                 noise_size=latent_dim,
             )
 
-            steps_this_turn += 1
-            
             # if should_train_discriminator == should_train_generator:
             #     if initial_train_steps > 0:
             #         initial_train_steps -= 1
@@ -468,32 +466,33 @@ def train(
             #     steps_this_turn = min([steps_this_turn, min_steps_per_turn])
                 
                 
+            # steps_this_turn += 1
             
-            # Switch who trains every 300 steps
-            if steps_this_turn >= train_steps_per_turn:
-                steps_this_turn = 0
-                if should_train_discriminator == should_train_generator:
-                    should_train_generator = False
-                    should_train_discriminator = True
-                else:
-                    should_train_generator = not should_train_generator
-                    should_train_discriminator = not should_train_discriminator
-                print(
-                    f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
-                )
+            # # Switch who trains every 300 steps
+            # if steps_this_turn >= train_steps_per_turn:
+            #     steps_this_turn = 0
+            #     if should_train_discriminator == should_train_generator:
+            #         should_train_generator = False
+            #         should_train_discriminator = True
+            #     else:
+            #         should_train_generator = not should_train_generator
+            #         should_train_discriminator = not should_train_discriminator
+            #     print(
+            #         f"Switching who trains: {should_train_generator=}, {should_train_discriminator=}"
+            #     )
 
-                # Reset metrics
-                generator_loss_metric.reset_states()
-                discriminator_loss_metric.reset_states()
+            #     # Reset metrics
+            #     generator_loss_metric.reset_states()
+            #     discriminator_loss_metric.reset_states()
 
-            with generator_summary_writer.as_default(), discriminator_summary_writer.as_default():
-                tf.summary.scalar(
-                    "generator_loss", generator_loss_metric.result(), step=total_steps
-                )
-                tf.summary.scalar(
-                    "discriminator_loss", discriminator_loss_metric.result(), step=total_steps
-                )
-                total_steps += 1
+            # with generator_summary_writer.as_default(), discriminator_summary_writer.as_default():
+            #     tf.summary.scalar(
+            #         "generator_loss", generator_loss_metric.result(), step=total_steps
+            #     )
+            #     tf.summary.scalar(
+            #         "discriminator_loss", discriminator_loss_metric.result(), step=total_steps
+            #     )
+            #     total_steps += 1
 
             if step % 5 == 0:
                 print(
